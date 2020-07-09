@@ -1,0 +1,81 @@
+#!/bin/sh
+SCRIPT_PATH=$(readlink -f `which heaptrack`)
+SCRIPT_DIR=$(dirname "$SCRIPT_PATH")
+EXE_PATH=$(readlink -f "$SCRIPT_DIR")
+
+LIB_REL_PATH="../lib/heaptrack"
+LIBEXEC_REL_PATH="../lib/heaptrack/libexec"
+
+INTERPRETER="$EXE_PATH/$LIBEXEC_REL_PATH/heaptrack_interpret"
+if [ ! -f "$INTERPRETER" ]; then
+    echo "Could not find heaptrack interpreter executable: $INTERPRETER"
+    exit 1
+fi
+INTERPRETER=$(readlink -f "$INTERPRETER")
+
+LIBHEAPTRACK_PRELOAD="$EXE_PATH/$LIB_REL_PATH/libheaptrack_preload.so"
+if [ ! -f "$LIBHEAPTRACK_PRELOAD" ]; then
+    echo "Could not find heaptrack preload library $LIBHEAPTRACK_PRELOAD"
+    exit 1
+fi
+LIBHEAPTRACK_PRELOAD=$(readlink -f "$LIBHEAPTRACK_PRELOAD")
+
+pipe=/tmp/heaptrack_fifo$$
+mkfifo $pipe
+
+output_suffix="gz"
+COMPRESSOR="gzip -c"
+output=/tmp/heaptrack
+pid=$$
+dump_output() {
+count=0
+while true
+do
+    cat $pipe > $output.$pid.$count &
+    sleep 5
+    kill -9 $!
+    wait $! 2> /dev/null
+    if [ ! -d /proc/$pid ]
+    then
+        "$INTERPRETER" < $output.$pid.$count | $COMPRESSOR > "$output.$count.$pid.$output_suffix" &
+        exit
+    fi
+    "$INTERPRETER" < $output.$pid.$count | $COMPRESSOR > "$output.$count.$pid.$output_suffix" &
+    count=`expr $count + 1`
+    rm $output.$pid.$count
+done
+}
+echo ''
+echo '============================================='
+echo '-------------RDKB-HEAPTRACKER----------------'
+echo '============================================='
+if [ $# -ne 1 ]
+then
+echo 'Usage: rdkb_heaptrack <pid> &'
+exit
+fi
+pidkill=$1
+if [ -d /proc/$pidkill ]
+then
+    echo "PID $pidkill is running..."
+else
+    echo "PID $pidkill doesn't exist. EXITING..."
+    exit
+fi
+process=`cat /proc/$pidkill/cmdline | tr '\0' ' '`
+echo "Name of the process $pidkill"
+echo $process
+echo "Brief Information about PID $pidkill"
+echo "----------------------------------------------------------------------"
+ps | grep -i $pidkill | awk '{for(i=5;i<=NF;i++){printf "%s ", $i}; printf "\n"}'
+echo "----------------------------------------------------------------------"
+echo "ALERT: If you don't want to kill this process, Give SIGINT (^c)"
+echo 'Sleeping for 5 seconds...'
+sleep 5
+kill -9 $pidkill
+echo "Killed $pidkill"
+dump_output &
+dumppid=$!
+echo "Re-spawning the process with LD_PRELOAD"
+LD_PRELOAD="$LIBHEAPTRACK_PRELOAD" DUMP_HEAPTRACK_OUTPUT="$pipe" $process
+wait $dumppid
