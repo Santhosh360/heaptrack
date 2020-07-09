@@ -22,6 +22,7 @@ LIBHEAPTRACK_PRELOAD=$(readlink -f "$LIBHEAPTRACK_PRELOAD")
 
 pipe=/tmp/heaptrack_fifo$$
 mkfifo $pipe
+trap "rm -f $pipe" SIGINT
 
 output_suffix="gz"
 COMPRESSOR="gzip -c"
